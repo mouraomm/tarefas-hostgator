@@ -1,0 +1,630 @@
+<!doctype html>
+<!--
+  Gestor de Tarefas — página modelo para Zoho Catalyst (Web Client Hosting / Slate)
+
+  COMO PUBLICAR
+  1. Copie este arquivo para a pasta "client" do seu projeto Catalyst (substitua o index.html).
+  2. Rode:  catalyst deploy   (ou faça upload pelo console, em Web Client Hosting).
+
+  ARMAZENAMENTO
+  - CONFIG.mode = 'sheets' → tarefas compartilhadas numa Google Planilha (ver apps-script/Codigo.gs).
+                             Pode hospedar esta página no GitHub Pages.
+  - CONFIG.mode = 'local' → as tarefas ficam no navegador (localStorage). Bom para testar o modelo.
+  - CONFIG.mode = 'api'   → a página chama uma Advanced I/O Function (CONFIG.apiBase) com o contrato:
+        GET    /tasks          → [ {id, titulo, descricao, responsavel, status, prioridade, inicio, prazo} ]
+        POST   /tasks          → cria e devolve a tarefa (com id)
+        PUT    /tasks/:id      → atualiza campos enviados e devolve a tarefa
+        DELETE /tasks/:id      → remove
+    No Data Store, use o ROWID como "id". Datas no formato AAAA-MM-DD.
+-->
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Gestor de Tarefas</title>
+<style>
+  :root{
+    --bg:#f5f6fa; --card:#ffffff; --text:#1f2430; --muted:#6b7280; --line:#e6e8ef;
+    --accent:#4f46e5; --accent-soft:#eef2ff; --danger:#dc2626; --radius:10px;
+    --shadow:0 1px 2px rgba(16,24,40,.06),0 1px 3px rgba(16,24,40,.08);
+  }
+  *{box-sizing:border-box}
+  body{margin:0;font-family:Inter,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;background:var(--bg);color:var(--text);font-size:14px}
+  button,input,select,textarea{font:inherit;color:inherit}
+  .app{max-width:1280px;margin:0 auto;padding:20px 16px 48px}
+
+  /* Cabeçalho */
+  .top{display:flex;flex-wrap:wrap;gap:12px;align-items:center;justify-content:space-between;margin-bottom:16px}
+  .top h1{font-size:22px;margin:0;font-weight:700;letter-spacing:-.01em}
+  .top p{margin:2px 0 0;color:var(--muted)}
+  .btn{border:1px solid var(--line);background:var(--card);padding:8px 14px;border-radius:8px;cursor:pointer;font-weight:500}
+  .btn:hover{border-color:#cfd3dd}
+  .btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+  .btn.primary:hover{filter:brightness(1.07)}
+  .btn.danger{color:var(--danger);border-color:#f3c4c4}
+  .actions{display:flex;gap:8px;flex-wrap:wrap}
+
+  /* Resumo */
+  .stats{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:10px;margin-bottom:16px}
+  .stat{background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:12px 14px;box-shadow:var(--shadow)}
+  .stat .n{font-size:22px;font-weight:700}
+  .stat .l{color:var(--muted);font-size:12px;text-transform:uppercase;letter-spacing:.04em}
+  .stat.late .n{color:var(--danger)}
+  .bar{height:6px;background:var(--line);border-radius:4px;margin-top:8px;overflow:hidden}
+  .bar>i{display:block;height:100%;background:#00c875}
+
+  /* Barra de ferramentas */
+  .toolbar{display:flex;flex-wrap:wrap;gap:8px;align-items:center;background:var(--card);border:1px solid var(--line);border-radius:var(--radius);padding:10px;margin-bottom:16px;box-shadow:var(--shadow)}
+  .toolbar input,.toolbar select{border:1px solid var(--line);border-radius:8px;padding:7px 10px;background:#fff;min-width:0}
+  .toolbar input[type=search]{flex:1 1 220px}
+  .seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;margin-left:auto}
+  .seg button{border:0;background:#fff;padding:7px 12px;cursor:pointer}
+  .seg button.on{background:var(--accent-soft);color:var(--accent);font-weight:600}
+
+  /* Tabela agrupada (estilo monday) */
+  .group{margin-bottom:18px}
+  .group-head{display:flex;align-items:center;gap:8px;cursor:pointer;user-select:none;padding:4px 2px;color:var(--g);font-weight:700;font-size:15px}
+  .group-head .count{color:var(--muted);font-weight:500;font-size:12px}
+  .chev{width:14px;display:inline-block}
+  .tbl-wrap{overflow-x:auto;background:var(--card);border:1px solid var(--line);border-left:5px solid var(--g);border-radius:var(--radius);box-shadow:var(--shadow)}
+  table{width:100%;border-collapse:collapse;min-width:860px}
+  th,td{padding:8px 10px;border-bottom:1px solid var(--line);text-align:left;white-space:nowrap}
+  th{font-size:12px;color:var(--muted);font-weight:600;background:#fafbfd}
+  tr:last-child td{border-bottom:0}
+  td.c-title{white-space:normal;min-width:260px}
+  .title-btn{background:none;border:0;padding:0;cursor:pointer;text-align:left;font-weight:500}
+  .title-btn:hover{color:var(--accent);text-decoration:underline}
+  .desc{display:block;color:var(--muted);font-size:12px;margin-top:2px;max-width:420px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+  .pill{appearance:none;-webkit-appearance:none;border:0;border-radius:6px;padding:5px 10px;color:#fff;font-weight:600;font-size:12px;cursor:pointer;text-align:center;min-width:112px}
+  .pill option{color:#1f2430;background:#fff}
+  .avatar{display:inline-flex;align-items:center;gap:6px}
+  .avatar i{width:24px;height:24px;border-radius:50%;display:inline-grid;place-items:center;color:#fff;font-style:normal;font-size:11px;font-weight:700}
+  .due{display:inline-block;padding:3px 8px;border-radius:999px;font-size:12px;font-weight:600}
+  .due.late{background:#fde8e8;color:#b91c1c}
+  .due.today{background:#ffedd5;color:#c2410c}
+  .due.soon{background:#fef9c3;color:#854d0e}
+  .due.ok{background:#eef2f7;color:#475569}
+  .due.done{background:#dcfce7;color:#15803d}
+  .empty{color:var(--muted);text-align:center;padding:14px}
+  .link{background:none;border:0;color:var(--muted);cursor:pointer;padding:2px 0}
+  .link:hover{color:var(--accent)}
+
+  /* Kanban */
+  .kanban{display:grid;grid-auto-flow:column;grid-auto-columns:minmax(230px,1fr);gap:12px;overflow-x:auto;padding-bottom:8px}
+  .col{background:#eceef4;border-radius:var(--radius);padding:10px;min-height:200px;display:flex;flex-direction:column;gap:8px}
+  .col.over{outline:2px dashed var(--accent);outline-offset:-2px}
+  .col-head{display:flex;align-items:center;gap:8px;font-weight:700}
+  .col-head .dot{width:10px;height:10px;border-radius:50%;background:var(--g)}
+  .col-head .count{color:var(--muted);font-weight:500;font-size:12px}
+  .card{background:var(--card);border-radius:8px;padding:10px;box-shadow:var(--shadow);cursor:grab;border-left:4px solid var(--p)}
+  .card:active{cursor:grabbing}
+  .card.dragging{opacity:.5}
+  .card h4{margin:0 0 6px;font-size:14px;font-weight:600}
+  .card .meta{display:flex;flex-wrap:wrap;gap:6px;align-items:center;font-size:12px;color:var(--muted)}
+  .tag{font-size:11px;font-weight:600;padding:2px 7px;border-radius:999px;color:#fff;background:var(--p)}
+
+  /* Modal */
+  dialog{border:0;border-radius:14px;padding:0;width:min(560px,calc(100vw - 32px));box-shadow:0 20px 50px rgba(0,0,0,.25)}
+  dialog::backdrop{background:rgba(15,23,42,.45)}
+  .modal-head{padding:16px 20px;border-bottom:1px solid var(--line);display:flex;justify-content:space-between;align-items:center}
+  .modal-head h2{margin:0;font-size:17px}
+  .x{background:none;border:0;font-size:22px;line-height:1;cursor:pointer;color:var(--muted)}
+  form .body{padding:16px 20px;display:grid;grid-template-columns:1fr 1fr;gap:12px}
+  .field{display:flex;flex-direction:column;gap:4px}
+  .field.full{grid-column:1/-1}
+  .field label{font-size:12px;font-weight:600;color:var(--muted)}
+  .field input,.field select,.field textarea{border:1px solid var(--line);border-radius:8px;padding:8px 10px;background:#fff}
+  .field textarea{min-height:80px;resize:vertical}
+  .field input:focus,.field select:focus,.field textarea:focus,.toolbar input:focus,.toolbar select:focus{outline:2px solid var(--accent-soft);border-color:var(--accent)}
+  .err{grid-column:1/-1;color:var(--danger);font-size:12px;min-height:1em;margin:0}
+  .modal-foot{padding:12px 20px;border-top:1px solid var(--line);display:flex;gap:8px;justify-content:flex-end}
+  .modal-foot .spacer{flex:1}
+
+  .toast{position:fixed;bottom:20px;left:50%;transform:translateX(-50%);background:#111827;color:#fff;padding:10px 16px;border-radius:8px;font-size:13px;opacity:0;pointer-events:none;transition:opacity .2s}
+  .toast.show{opacity:1}
+
+  @media (max-width:640px){
+    form .body{grid-template-columns:1fr}
+    .seg{margin-left:0}
+    .top h1{font-size:19px}
+  }
+</style>
+</head>
+<body>
+<div class="app">
+  <div class="top">
+    <div>
+      <h1>Gestor de Tarefas</h1>
+      <p>Crie tarefas, defina responsáveis e prazos e acompanhe o andamento.</p>
+    </div>
+    <div class="actions">
+      <button class="btn" id="btnCsv">Exportar CSV</button>
+      <button class="btn primary" id="btnNew">+ Nova tarefa</button>
+    </div>
+  </div>
+
+  <div class="stats" id="stats"></div>
+
+  <div class="toolbar">
+    <input type="search" id="fQ" placeholder="Buscar tarefa…">
+    <select id="fResp"><option value="">Todos os responsáveis</option></select>
+    <select id="fStatus"><option value="">Todos os status</option></select>
+    <select id="fPrio"><option value="">Todas as prioridades</option></select>
+    <select id="fDue">
+      <option value="">Qualquer prazo</option>
+      <option value="late">Atrasadas</option>
+      <option value="week">Vencem em 7 dias</option>
+      <option value="none">Sem prazo</option>
+    </select>
+    <div class="seg" role="tablist">
+      <button data-view="tabela" class="on">Tabela</button>
+      <button data-view="kanban">Kanban</button>
+    </div>
+  </div>
+
+  <div id="view"></div>
+</div>
+
+<dialog id="dlg">
+  <form id="frm" method="dialog" novalidate>
+    <div class="modal-head">
+      <h2 id="dlgTitle">Nova tarefa</h2>
+      <button type="button" class="x" id="btnClose" aria-label="Fechar">×</button>
+    </div>
+    <div class="body">
+      <div class="field full">
+        <label for="iTitulo">Título *</label>
+        <input id="iTitulo" name="titulo" maxlength="160" required>
+      </div>
+      <div class="field full">
+        <label for="iDesc">Descrição</label>
+        <textarea id="iDesc" name="descricao"></textarea>
+      </div>
+      <div class="field">
+        <label for="iResp">Responsável</label>
+        <input id="iResp" name="responsavel" list="dlResp" placeholder="Nome">
+        <datalist id="dlResp"></datalist>
+      </div>
+      <div class="field">
+        <label for="iPrio">Prioridade</label>
+        <select id="iPrio" name="prioridade"></select>
+      </div>
+      <div class="field">
+        <label for="iStatus">Status</label>
+        <select id="iStatus" name="status"></select>
+      </div>
+      <div class="field"></div>
+      <div class="field">
+        <label for="iInicio">Início</label>
+        <input id="iInicio" name="inicio" type="date">
+      </div>
+      <div class="field">
+        <label for="iPrazo">Prazo</label>
+        <input id="iPrazo" name="prazo" type="date">
+      </div>
+      <p class="err" id="frmErr"></p>
+    </div>
+    <div class="modal-foot">
+      <button type="button" class="btn danger" id="btnDelete" hidden>Excluir</button>
+      <span class="spacer"></span>
+      <button type="button" class="btn" id="btnCancel">Cancelar</button>
+      <button type="submit" class="btn primary" id="btnSave">Salvar</button>
+    </div>
+  </form>
+</dialog>
+
+<div class="toast" id="toast"></div>
+
+<script>
+/* ================= CONFIGURAÇÃO ================= */
+const CONFIG = {
+  // 'sheets' = Google Planilha (compartilhado) · 'api' = Catalyst · 'local' = só neste navegador
+  mode: 'sheets',
+  sheetsUrl: 'https://script.google.com/macros/s/AKfycbwUqoRoYC5yHxxqhZ0-6y8G0v-fEHIe5CRJTdE8YK4eQ00IEkPMzWgAWBUorTa8c_rP/exec',                    // COLE AQUI a URL do App da Web do Apps Script (termina em /exec)
+  token: '',                          // opcional: mesmo valor do TOKEN no Apps Script
+  autoRefreshSeg: 30,                 // recarrega a lista para ver alterações dos colegas
+  apiBase: '/server/tarefas_api',     // caminho da Advanced I/O Function no Catalyst
+  storageKey: 'catalyst_tarefas_v1'
+};
+
+const STATUS = [
+  { id:'todo',    label:'A fazer',      color:'#8b93a7' },
+  { id:'doing',   label:'Em andamento', color:'#f59e0b' },
+  { id:'review',  label:'Em revisão',   color:'#3b82f6' },
+  { id:'done',    label:'Concluído',    color:'#00b86b' }
+];
+const PRIO = [
+  { id:'baixa',   label:'Baixa',   color:'#94a3b8', w:1 },
+  { id:'media',   label:'Média',   color:'#6366f1', w:2 },
+  { id:'alta',    label:'Alta',    color:'#f97316', w:3 },
+  { id:'critica', label:'Crítica', color:'#dc2626', w:4 }
+];
+const S = Object.fromEntries(STATUS.map(s => [s.id, s]));
+const P = Object.fromEntries(PRIO.map(p => [p.id, p]));
+
+/* ================= UTILITÁRIOS ================= */
+const $ = sel => document.querySelector(sel);
+const esc = v => String(v ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+const pad = n => String(n).padStart(2, '0');
+const toISO = d => `${d.getFullYear()}-${pad(d.getMonth()+1)}-${pad(d.getDate())}`;
+const parseISO = s => { if (!s) return null; const [y,m,d] = s.split('-').map(Number); return new Date(y, m-1, d); };
+const today = () => { const d = new Date(); d.setHours(0,0,0,0); return d; };
+const addDays = n => { const d = today(); d.setDate(d.getDate() + n); return toISO(d); };
+const fmtDate = s => { const d = parseISO(s); return d ? d.toLocaleDateString('pt-BR', {day:'2-digit', month:'short'}).replace('.', '') : '—'; };
+const daysTo = s => { const d = parseISO(s); return d ? Math.round((d - today()) / 86400000) : null; };
+
+function initials(name){
+  const p = String(name || '').trim().split(/\s+/).filter(Boolean);
+  if (!p.length) return '?';
+  return (p[0][0] + (p.length > 1 ? p[p.length-1][0] : '')).toUpperCase();
+}
+function colorFor(name){
+  const palette = ['#6366f1','#0ea5e9','#14b8a6','#f97316','#a855f7','#ec4899','#84cc16','#ef4444'];
+  let h = 0; for (const c of String(name)) h = (h * 31 + c.charCodeAt(0)) >>> 0;
+  return palette[h % palette.length];
+}
+function dueInfo(t){
+  if (t.status === 'done') return { cls:'done', txt:'Concluída' };
+  const n = daysTo(t.prazo);
+  if (n === null) return { cls:'ok', txt:'Sem prazo' };
+  if (n < 0)  return { cls:'late',  txt:`Atrasada ${-n} d` };
+  if (n === 0) return { cls:'today', txt:'Vence hoje' };
+  if (n <= 3) return { cls:'soon',  txt:`Em ${n} d` };
+  return { cls:'ok', txt:`Em ${n} d` };
+}
+function toast(msg){
+  const el = $('#toast'); el.textContent = msg; el.classList.add('show');
+  clearTimeout(toast._t); toast._t = setTimeout(() => el.classList.remove('show'), 2400);
+}
+
+/* ================= ARMAZENAMENTO ================= */
+function seed(){
+  const base = [
+    ['Levantamento de requisitos', 'Reunião com a área comercial', 'Ana Souza', 'done', 'alta', -12, -6],
+    ['Desenho do pipeline de vendas', 'Etapas, campos obrigatórios e regras', 'Bruno Lima', 'review', 'alta', -5, 1],
+    ['Configurar layouts de módulo', '', 'Carla Dias', 'doing', 'media', -3, 4],
+    ['Integração com e-mail', 'Aguardando credenciais do cliente', 'Bruno Lima', 'doing', 'critica', -4, -1],
+    ['Importação de dados legados', 'Planilha de contas e contatos', 'Ana Souza', 'todo', 'media', 2, 9],
+    ['Treinamento dos usuários', '', 'Carla Dias', 'todo', 'baixa', 10, 14]
+  ];
+  return base.map(([titulo, descricao, responsavel, status, prioridade, i, p]) => ({
+    id: uid(), titulo, descricao, responsavel, status, prioridade, inicio: addDays(i), prazo: addDays(p)
+  }));
+}
+
+const LocalStore = {
+  cache: null,
+  _read(){ try { return JSON.parse(localStorage.getItem(CONFIG.storageKey)); } catch(e){ return null; } },
+  _write(){ try { localStorage.setItem(CONFIG.storageKey, JSON.stringify(this.cache)); } catch(e){} },
+  async list(){
+    if (!this.cache){ this.cache = this._read() || seed(); this._write(); }
+    return this.cache.map(t => ({...t}));
+  },
+  async create(t){ await this.list(); const n = {...t, id: uid()}; this.cache.push(n); this._write(); return n; },
+  async update(id, patch){
+    await this.list(); const i = this.cache.findIndex(x => x.id === id);
+    if (i < 0) throw new Error('Tarefa não encontrada');
+    this.cache[i] = {...this.cache[i], ...patch}; this._write(); return this.cache[i];
+  },
+  async remove(id){ await this.list(); this.cache = this.cache.filter(x => x.id !== id); this._write(); }
+};
+
+const ApiStore = {
+  async req(method, path, body){
+    const r = await fetch(CONFIG.apiBase + path, {
+      method, headers: {'Content-Type':'application/json'},
+      body: body ? JSON.stringify(body) : undefined, credentials: 'same-origin'
+    });
+    if (!r.ok) throw new Error(`Erro ${r.status} ao acessar a API`);
+    return r.status === 204 ? null : r.json();
+  },
+  list(){ return this.req('GET', '/tasks'); },
+  create(t){ return this.req('POST', '/tasks', t); },
+  update(id, p){ return this.req('PUT', '/tasks/' + encodeURIComponent(id), p); },
+  remove(id){ return this.req('DELETE', '/tasks/' + encodeURIComponent(id)); }
+};
+
+/* Google Planilha via Apps Script. Usa POST com text/plain para evitar bloqueio de CORS. */
+const SheetsStore = {
+  async call(body){
+    let r;
+    try {
+      r = await fetch(CONFIG.sheetsUrl, {
+        method: 'POST',
+        headers: { 'Content-Type': 'text/plain;charset=utf-8' },
+        body: JSON.stringify({ ...body, token: CONFIG.token })
+      });
+    } catch(e){ throw new Error('Sem conexão com a planilha'); }
+    const j = await r.json().catch(() => ({ ok:false, erro:'Resposta inválida da planilha' }));
+    if (!j.ok) throw new Error(j.erro || 'Erro na planilha');
+    return j.data;
+  },
+  list(){ return this.call({ action:'list' }); },
+  create(t){ return this.call({ action:'create', task:t }); },
+  update(id, p){ return this.call({ action:'update', id, patch:p }); },
+  remove(id){ return this.call({ action:'delete', id }); }
+};
+
+let Store = LocalStore;
+if (CONFIG.mode === 'api') Store = ApiStore;
+if (CONFIG.mode === 'sheets'){
+  if (CONFIG.sheetsUrl) Store = SheetsStore;
+  else setTimeout(() => toast('Modo de teste: configure sheetsUrl para salvar na planilha'), 600);
+}
+const shared = Store !== LocalStore;
+
+/* ================= ESTADO ================= */
+const state = {
+  tasks: [],
+  view: 'tabela',
+  collapsed: new Set(),
+  editing: null,
+  f: { q:'', resp:'', status:'', prio:'', due:'' }
+};
+
+async function load(){
+  try {
+    state.tasks = (await Store.list()).map(t => S[t.status] ? t : { ...t, status:'todo' }); // status removido → A fazer
+  }
+  catch(e){
+    if (!state.tasks.length){
+      $('#view').innerHTML = `<div class="empty" style="background:#fde8e8;color:#b91c1c;border-radius:10px;padding:16px">
+        <b>Não foi possível carregar as tarefas.</b><br>${esc(e.message)}<br>
+        <small>Abra a URL do Apps Script no navegador para ver o erro detalhado.</small></div>`;
+      return;
+    }
+    toast(e.message);
+  }
+  render();
+}
+async function save(fn, okMsg){
+  if (shared) toast('Salvando…');
+  try { await fn(); if (okMsg) toast(okMsg); await load(); }
+  catch(e){ toast(e.message || 'Não foi possível salvar'); }
+}
+
+function filtered(){
+  const { q, resp, status, prio, due } = state.f;
+  const qq = q.trim().toLowerCase();
+  return state.tasks.filter(t => {
+    if (qq && !(`${t.titulo} ${t.descricao || ''} ${t.responsavel || ''}`.toLowerCase().includes(qq))) return false;
+    if (resp && (t.responsavel || '') !== resp) return false;
+    if (status && t.status !== status) return false;
+    if (prio && t.prioridade !== prio) return false;
+    if (due){
+      const n = daysTo(t.prazo);
+      if (due === 'none' && n !== null) return false;
+      if (due === 'late' && !(n !== null && n < 0 && t.status !== 'done')) return false;
+      if (due === 'week' && !(n !== null && n >= 0 && n <= 7 && t.status !== 'done')) return false;
+    }
+    return true;
+  }).sort((a, b) => {
+    const da = a.prazo || '9999-99-99', db = b.prazo || '9999-99-99';
+    if (da !== db) return da < db ? -1 : 1;
+    return (P[b.prioridade]?.w || 0) - (P[a.prioridade]?.w || 0);
+  });
+}
+
+/* ================= RENDERIZAÇÃO ================= */
+function render(){
+  renderFilters();
+  const list = filtered();
+  renderStats(list);
+  if (state.view === 'kanban') renderKanban(list); else renderTable(list);
+}
+
+function renderFilters(){
+  const people = [...new Set(state.tasks.map(t => t.responsavel).filter(Boolean))].sort((a,b) => a.localeCompare(b, 'pt-BR'));
+  const fill = (sel, first, items, cur) => {
+    sel.innerHTML = `<option value="">${first}</option>` + items.map(([v, l]) => `<option value="${esc(v)}">${esc(l)}</option>`).join('');
+    sel.value = cur;
+  };
+  fill($('#fResp'), 'Todos os responsáveis', people.map(p => [p, p]), state.f.resp);
+  fill($('#fStatus'), 'Todos os status', STATUS.map(s => [s.id, s.label]), state.f.status);
+  fill($('#fPrio'), 'Todas as prioridades', PRIO.map(p => [p.id, p.label]), state.f.prio);
+  $('#dlResp').innerHTML = people.map(p => `<option value="${esc(p)}">`).join('');
+}
+
+function renderStats(list){
+  const total = list.length;
+  const done = list.filter(t => t.status === 'done').length;
+  const doing = list.filter(t => t.status === 'doing' || t.status === 'review').length;
+  const late = list.filter(t => t.status !== 'done' && (daysTo(t.prazo) ?? 1) < 0).length;
+  const pct = total ? Math.round(done / total * 100) : 0;
+  $('#stats').innerHTML = `
+    <div class="stat"><div class="l">Tarefas</div><div class="n">${total}</div></div>
+    <div class="stat"><div class="l">Em andamento</div><div class="n">${doing}</div></div>
+    <div class="stat late"><div class="l">Atrasadas</div><div class="n">${late}</div></div>
+    <div class="stat"><div class="l">Concluídas</div><div class="n">${done} <small style="font-size:13px;color:var(--muted);font-weight:500">(${pct}%)</small></div><div class="bar"><i style="width:${pct}%"></i></div></div>`;
+}
+
+function pillSelect(kind, t){
+  const items = kind === 'status' ? STATUS : PRIO;
+  const cur = kind === 'status' ? S[t.status] : P[t.prioridade];
+  return `<select class="pill" data-inline="${kind}" data-id="${esc(t.id)}" style="background:${cur ? cur.color : '#9ca3af'}" aria-label="${kind === 'status' ? 'Status' : 'Prioridade'}">
+    ${items.map(i => `<option value="${i.id}" ${cur && i.id === cur.id ? 'selected' : ''}>${i.label}</option>`).join('')}
+  </select>`;
+}
+function personHtml(name){
+  if (!name) return '<span style="color:var(--muted)">—</span>';
+  return `<span class="avatar"><i style="background:${colorFor(name)}">${esc(initials(name))}</i>${esc(name)}</span>`;
+}
+
+function renderTable(list){
+  let html = '';
+  for (const s of STATUS){
+    if (state.f.status && state.f.status !== s.id) continue;
+    const items = list.filter(t => t.status === s.id);
+    const col = state.collapsed.has(s.id);
+    html += `<section class="group" style="--g:${s.color}">
+      <div class="group-head" data-toggle="${s.id}"><span class="chev">${col ? '▸' : '▾'}</span>${s.label}<span class="count">${items.length} tarefa${items.length === 1 ? '' : 's'}</span></div>`;
+    if (!col){
+      html += `<div class="tbl-wrap"><table>
+        <thead><tr><th>Tarefa</th><th>Responsável</th><th>Status</th><th>Prioridade</th><th>Início</th><th>Prazo</th><th>Situação</th></tr></thead><tbody>`;
+      html += items.map(t => {
+        const d = dueInfo(t);
+        return `<tr>
+          <td class="c-title"><button class="title-btn" data-open="${esc(t.id)}">${esc(t.titulo)}</button>${t.descricao ? `<span class="desc">${esc(t.descricao)}</span>` : ''}</td>
+          <td>${personHtml(t.responsavel)}</td>
+          <td>${pillSelect('status', t)}</td>
+          <td>${pillSelect('prio', t)}</td>
+          <td>${fmtDate(t.inicio)}</td>
+          <td>${fmtDate(t.prazo)}</td>
+          <td><span class="due ${d.cls}">${d.txt}</span></td>
+        </tr>`;
+      }).join('') || `<tr><td colspan="7" class="empty">Nenhuma tarefa neste grupo</td></tr>`;
+      html += `<tr><td colspan="7"><button class="link" data-add="${s.id}">+ Adicionar tarefa</button></td></tr></tbody></table></div>`;
+    }
+    html += `</section>`;
+  }
+  $('#view').innerHTML = html || '<p class="empty">Nenhuma tarefa encontrada.</p>';
+}
+
+function renderKanban(list){
+  const cols = STATUS.filter(s => !state.f.status || state.f.status === s.id);
+  $('#view').innerHTML = `<div class="kanban">${cols.map(s => {
+    const items = list.filter(t => t.status === s.id);
+    return `<div class="col" data-drop="${s.id}" style="--g:${s.color}">
+      <div class="col-head"><span class="dot"></span>${s.label}<span class="count">${items.length}</span></div>
+      ${items.map(t => {
+        const d = dueInfo(t), p = P[t.prioridade] || PRIO[0];
+        return `<div class="card" draggable="true" data-id="${esc(t.id)}" data-open="${esc(t.id)}" style="--p:${p.color}">
+          <h4>${esc(t.titulo)}</h4>
+          <div class="meta"><span class="tag">${p.label}</span><span class="due ${d.cls}">${d.txt}</span></div>
+          <div class="meta" style="margin-top:8px">${personHtml(t.responsavel)}<span style="margin-left:auto">${fmtDate(t.prazo)}</span></div>
+        </div>`;
+      }).join('')}
+      <button class="link" data-add="${s.id}">+ Adicionar</button>
+    </div>`;
+  }).join('')}</div>`;
+}
+
+/* ================= MODAL ================= */
+const dlg = $('#dlg'), frm = $('#frm');
+$('#iStatus').innerHTML = STATUS.map(s => `<option value="${s.id}">${s.label}</option>`).join('');
+$('#iPrio').innerHTML = PRIO.map(p => `<option value="${p.id}">${p.label}</option>`).join('');
+
+function openModal(task, presetStatus){
+  state.editing = task ? task.id : null;
+  $('#dlgTitle').textContent = task ? 'Editar tarefa' : 'Nova tarefa';
+  $('#btnDelete').hidden = !task;
+  $('#frmErr').textContent = '';
+  const t = task || { titulo:'', descricao:'', responsavel:'', status: presetStatus || 'todo', prioridade:'media', inicio: toISO(today()), prazo:'' };
+  frm.titulo.value = t.titulo || '';
+  frm.descricao.value = t.descricao || '';
+  frm.responsavel.value = t.responsavel || '';
+  frm.status.value = t.status || 'todo';
+  frm.prioridade.value = t.prioridade || 'media';
+  frm.inicio.value = t.inicio || '';
+  frm.prazo.value = t.prazo || '';
+  dlg.showModal();
+  frm.titulo.focus();
+}
+function closeModal(){ dlg.close(); state.editing = null; }
+
+frm.addEventListener('submit', e => {
+  e.preventDefault();
+  const data = {
+    titulo: frm.titulo.value.trim(),
+    descricao: frm.descricao.value.trim(),
+    responsavel: frm.responsavel.value.trim(),
+    status: frm.status.value,
+    prioridade: frm.prioridade.value,
+    inicio: frm.inicio.value,
+    prazo: frm.prazo.value
+  };
+  if (!data.titulo){ $('#frmErr').textContent = 'Informe o título da tarefa.'; frm.titulo.focus(); return; }
+  if (data.inicio && data.prazo && data.prazo < data.inicio){ $('#frmErr').textContent = 'O prazo não pode ser anterior à data de início.'; frm.prazo.focus(); return; }
+  const id = state.editing;
+  closeModal();
+  save(() => id ? Store.update(id, data) : Store.create(data), id ? 'Tarefa atualizada' : 'Tarefa criada');
+});
+$('#btnDelete').addEventListener('click', () => {
+  const id = state.editing;
+  if (!id) return;
+  const btn = $('#btnDelete');
+  if (btn.dataset.confirm !== '1'){ btn.dataset.confirm = '1'; btn.textContent = 'Confirmar exclusão'; return; }
+  btn.dataset.confirm = ''; btn.textContent = 'Excluir';
+  closeModal();
+  save(() => Store.remove(id), 'Tarefa excluída');
+});
+dlg.addEventListener('close', () => { const b = $('#btnDelete'); b.dataset.confirm = ''; b.textContent = 'Excluir'; });
+$('#btnCancel').addEventListener('click', closeModal);
+$('#btnClose').addEventListener('click', closeModal);
+
+/* ================= EVENTOS ================= */
+$('#btnNew').addEventListener('click', () => openModal(null));
+
+$('#view').addEventListener('click', e => {
+  const tog = e.target.closest('[data-toggle]');
+  if (tog){ const id = tog.dataset.toggle; state.collapsed.has(id) ? state.collapsed.delete(id) : state.collapsed.add(id); render(); return; }
+  const add = e.target.closest('[data-add]');
+  if (add){ openModal(null, add.dataset.add); return; }
+  if (e.target.closest('select')) return;
+  const op = e.target.closest('[data-open]');
+  if (op){ const t = state.tasks.find(x => x.id === op.dataset.open); if (t) openModal(t); }
+});
+
+$('#view').addEventListener('change', e => {
+  const sel = e.target.closest('[data-inline]');
+  if (!sel) return;
+  const patch = sel.dataset.inline === 'status' ? { status: sel.value } : { prioridade: sel.value };
+  save(() => Store.update(sel.dataset.id, patch));
+});
+
+/* Arrastar e soltar no Kanban */
+let dragId = null;
+$('#view').addEventListener('dragstart', e => {
+  const c = e.target.closest('.card'); if (!c) return;
+  dragId = c.dataset.id; c.classList.add('dragging');
+  e.dataTransfer.effectAllowed = 'move'; e.dataTransfer.setData('text/plain', dragId);
+});
+$('#view').addEventListener('dragend', e => { e.target.closest('.card')?.classList.remove('dragging'); document.querySelectorAll('.col.over').forEach(c => c.classList.remove('over')); });
+$('#view').addEventListener('dragover', e => { const col = e.target.closest('[data-drop]'); if (!col) return; e.preventDefault(); col.classList.add('over'); });
+$('#view').addEventListener('dragleave', e => { const col = e.target.closest('[data-drop]'); if (col && !col.contains(e.relatedTarget)) col.classList.remove('over'); });
+$('#view').addEventListener('drop', e => {
+  const col = e.target.closest('[data-drop]'); if (!col || !dragId) return;
+  e.preventDefault(); col.classList.remove('over');
+  const id = dragId, status = col.dataset.drop; dragId = null;
+  const t = state.tasks.find(x => x.id === id);
+  if (t && t.status !== status) save(() => Store.update(id, { status }), `Movida para "${S[status].label}"`);
+});
+
+/* Filtros e visão */
+$('#fQ').addEventListener('input', e => { state.f.q = e.target.value; render(); });
+$('#fResp').addEventListener('change', e => { state.f.resp = e.target.value; render(); });
+$('#fStatus').addEventListener('change', e => { state.f.status = e.target.value; render(); });
+$('#fPrio').addEventListener('change', e => { state.f.prio = e.target.value; render(); });
+$('#fDue').addEventListener('change', e => { state.f.due = e.target.value; render(); });
+document.querySelectorAll('.seg button').forEach(b => b.addEventListener('click', () => {
+  state.view = b.dataset.view;
+  document.querySelectorAll('.seg button').forEach(x => x.classList.toggle('on', x === b));
+  render();
+}));
+
+/* Exportar CSV (abre corretamente no Excel em pt-BR) */
+$('#btnCsv').addEventListener('click', () => {
+  const rows = [['Título','Descrição','Responsável','Status','Prioridade','Início','Prazo','Situação']];
+  filtered().forEach(t => rows.push([t.titulo, t.descricao || '', t.responsavel || '', S[t.status]?.label || t.status, P[t.prioridade]?.label || t.prioridade, t.inicio || '', t.prazo || '', dueInfo(t).txt]));
+  const csv = rows.map(r => r.map(v => `"${String(v).replace(/"/g, '""')}"`).join(';')).join('\r\n');
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob(['﻿' + csv], { type: 'text/csv;charset=utf-8' }));
+  a.download = `tarefas_${toISO(today())}.csv`;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+});
+
+if (shared) $('#view').innerHTML = '<p class="empty">Carregando tarefas…</p>';
+load();
+
+/* Atualização automática para ver o que os colegas mudaram */
+if (shared && CONFIG.autoRefreshSeg > 0){
+  setInterval(() => {
+    if (document.hidden || dlg.open || dragId || document.activeElement?.matches('select.pill')) return;
+    load();
+  }, CONFIG.autoRefreshSeg * 1000);
+}
+</script>
+</body>
+</html>
